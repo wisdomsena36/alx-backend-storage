@@ -1,74 +1,94 @@
 #!/usr/bin/env python3
-""" Module for Redis db """
-import redis
-from uuid import uuid4
-from typing import Union, Callable, Optional
+"""
+Redis basics
+"""
 from functools import wraps
-UnionOfTypes = Union[str, bytes, int, float]
+from typing import Callable, Union, Optional
+import uuid
+import redis
 
 
 def count_calls(method: Callable) -> Callable:
-    """ decorator Counts how many times methods of Cache class are called """
-    key = method.__qualname__
-
+    """Decorator that counts the number of times a funct is called"""
     @wraps(method)
-    def wrapper(self, *args, **kwds):
-        """ This is wrapper function for call_calls method """
-        self._redis.incr(key)
-        return method(self, *args, **kwds)
+    def wrapper(*args, **kwds):
+        key = method.__qualname__
+        self = args[0]
+        self._redis.incr(key, 1)
+        return method(*args, **kwds)
     return wrapper
 
 
 def call_history(method: Callable) -> Callable:
-    """ Stores the history of inputs and outputs for a particular function """
-    input_list = method.__qualname__ + ":inputs"
-    output_list = method.__qualname__ + ":outputs"
-
+    """Decorator that saves a list of inputs and outputs"""
     @wraps(method)
-    def wrapper(self, *args) -> bytes:
-        """ This is wrapper function for call_history method """
-        self._redis.rpush(input_list, str(args))
-        output = method(self, *args)
-        self._redis.rpush(output_list, output)
+    def wrapper(*args, **kwds):
+        input_key = f'{method.__qualname__}:inputs'
+        output_key = f'{method.__qualname__}:outputs'
+        self = args[0]
+
+        self._redis.rpush(input_key, str(args[1:]))
+        output = method(*args, **kwds)
+        self._redis.rpush(output_key, str(output))
+
         return output
     return wrapper
 
 
-class Cache:
-    """ Class for methods that operate a caching system """
+def replay(method: Callable):
+    """Function that displays the history of calls of a particular function"""
+    _redis = redis.Redis()
+    key = method.__qualname__
+    count = int(_redis.get(key))
 
+    input_key = f'{method.__qualname__}:inputs'
+    output_key = f'{method.__qualname__}:outputs'
+
+    input_list = _redis.lrange(input_key, 0, count)
+    output_list = _redis.lrange(output_key, 0, count)
+
+    print(f'{method.__qualname__} was called {count} times:')
+    name = method.__qualname__
+    for i, o in zip(input_list, output_list):
+        print(f'{name}(*{i.decode("UTF-8")}) -> {o.decode("UTF-8")}')
+
+
+class Cache:
+    """
+    Cache class
+    """
     def __init__(self):
-        """ Instance of Redis db """
+        """Constructor"""
         self._redis = redis.Redis()
         self._redis.flushdb()
 
-    @count_calls
     @call_history
-    def store(self,
-              data: UnionOfTypes) -> str:
-        """
-        Method takes a data argument and returns a string
-        Generate a random key (e.g. using uuid), store the input data in Redis
-        using the random key and return the key
-        """
-        key = str(uuid4())
-        self._redis.mset({key: data})
+    @count_calls
+    def store(self, data: Union[str, Union[bytes, Union[int, float]]]) -> str:
+        """Method to save a key in redis"""
+        key = str(uuid.uuid1())
+        self._redis.set(key, data)
         return key
 
-    def get(self,
-            key: str,
-            fn: Optional[Callable] = None) -> UnionOfTypes:
-        """
-        Retrieves data stored at a key
-        converts the data back to the desired format
-        """
-        data = self._redis.get(key)
-        return fn(data) if fn else data
+    def get(self, key: str, fn: Optional[Callable] = None) -> Optional[
+            Union[str, Union[bytes, Union[int, float]]]
+            ]:
+        """Method to retrieve a value from redis"""
+        v = self._redis.get(key)
+        if v and fn:
+            return fn(v)
+        return v
 
-    def get_str(self, data: str) -> str:
-        """ get a string """
-        return self.get(key, str)
+    def get_str(self, value: Optional[
+            Union[str, Union[bytes, Union[int, float]]]
+            ]) -> str:
+        """Method that returns a str"""
+        return str(value)
 
-    def get_int(self, data: str) -> int:
-        """ get an int """
-        return self.get(key, int)
+    def get_int(self, value: Optional[
+            Union[str, Union[bytes, Union[int, float]]]
+            ]) -> Optional[int]:
+        """Method that returns an int"""
+        if value:
+            return int(value)
+        return value
